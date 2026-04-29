@@ -1,192 +1,153 @@
-# Diffend
+# Difend
 
-Do not trust AI-generated code blindly. Test every AI-produced diff with `diffend` before shipping.
+Do not trust AI-generated code blindly. Review every AI-produced diff with `difend` before shipping.
 
-Diffend means **Diff Defend**: a diff-aware, multi-agent security review system for code changes produced by developers, Codex, or other AI coding tools.
+Difend means **Diff Defend**: a diff-aware, multi-agent security review SDK with a CLI entry point. It reviews code changes produced by developers, Codex, or other AI coding tools, then writes a persistent scan bundle that humans and AI agents can use for safe follow-up.
 
 ## Idea
 
 AI-assisted coding makes it easy to produce large changes quickly, but security review often becomes the bottleneck. A single diff can include hidden risks that are easy to miss during normal code review, especially when reviewers are also checking functionality, style, and correctness.
 
-Existing automated security tools are useful for common issues like leaked secrets, vulnerable dependencies, injection patterns, and unsafe cryptography. They are weaker at deeper security questions involving authentication, authorisation, privilege boundaries, business logic, session handling, and sensitive data flows.
+Existing automated security tools are useful for common issues like leaked secrets, vulnerable dependencies, injection patterns, unsafe shell execution, and weak cryptography. They are weaker at deeper security questions involving authentication, authorisation, privilege boundaries, business logic, session handling, and sensitive data flows.
 
-Diffend is designed to review the code diff first, trace related context only when needed, and produce a persistent scan bundle that can be read by developers, security reviewers, Codex, or another AI coding assistant.
+Difend is designed to review the code diff first, trace related context only when needed, and produce structured security context that can be read by developers, security reviewers, Codex, or another AI coding assistant.
 
-The goal is not just to produce a report. The goal is to create structured security context that an AI agent or human reviewer can use to continue safely.
+The goal is not only to produce a report. The goal is to create a reusable handoff bundle that explains what changed, what was scanned, what was found, what still needs judgement, and what the safest next action should be.
 
 ## Product Shape
 
-Diffend has four connected layers:
+Difend has three connected layers:
 
-- **CLI:** `diffend scan` gives immediate terminal feedback after a code change.
-- **SDK:** the reusable scan engine captures diffs, runs security checks, coordinates agents, creates findings, and writes scan bundles.
-- **Multi-agent review system:** specialist security agents inspect the diff from different risk perspectives and return structured findings.
+- **CLI:** `difend scan` gives immediate terminal feedback after a code change.
+- **SDK:** the reusable scan engine captures diffs, runs the multi-agent security review system, creates findings, and writes scan bundles.
 - **Context bundle:** generated `.md`, `.patch`, and `.json` files preserve what was scanned, what was found, what needs manual review, proposed solution context, and what Codex or another agent should inspect next.
 
-This means Diffend supports two workflows at the same time:
+This means Difend supports two workflows at the same time:
 
-- quick local security feedback for the developer
+- quick local security feedback for developers
 - deeper AI-assisted security review through a structured handoff bundle
 
 ## Core Principle
 
-Diffend should be:
+Difend should be:
 
 - **Diff-first:** review changed lines before looking at the whole repository.
 - **Evidence-driven:** every finding should point to a file, line, check, and reason.
-- **Agent-friendly:** every scan should produce enough context for Codex or another AI agent to continue the task.
-- **Signals, not verdicts:** deterministic rules should collect context for agents, not replace agentic security judgment.
-- **Human-safe:** uncertain security risks should be escalated to manual review instead of being guessed away.
-- **Non-mutating by default:** Diffend may propose fixes, but it should not change application source code without explicit developer approval.
+- **SDK-centered:** the CLI should stay thin while the SDK owns capture, orchestration, review, and reporting.
+- **Agent-friendly:** every scan should produce enough context for Codex or another AI agent to continue safely.
+- **Signals, not blind verdicts:** deterministic rules should collect context for agents, not replace security judgement.
+- **Human-safe:** uncertain security risks should be escalated to manual review instead of guessed away.
+- **Non-mutating by default:** Difend may propose fixes, but it should not change application source code without explicit developer approval.
 - **Auditable:** every scan should save the exact patch and structured report used to make the decision.
 
-## Multi-Agent Architecture
+## Multi-Agent System Inside The SDK
 
-Diffend uses a supervisor-worker architecture.
+The Difend SDK owns the multi-agent review system. The CLI calls the SDK, and the SDK coordinates all review work.
 
-The context collectors and agents do not freely chat with each other. Context collectors extract security-relevant signals from the diff. Agentic review nodes use those signals, the patch, and related files to produce structured findings or manual-review items. The orchestrator keeps the flow controlled and auditable.
+The first version should use a supervisor-worker model with a small number of focused agents. Deterministic collectors gather signals from the diff, agentic review nodes make bounded security judgements, and the orchestrator merges everything into one scan result.
 
 ```mermaid
 flowchart TD
-  Developer["Developer / Codex / AI coding tool"] --> CLI["CLI: diffend scan"]
-  CLI --> SDK["Diffend SDK"]
+  Dev["Developer / Codex / AI coding tool"] --> CLI["CLI: difend scan"]
+  CLI --> SDK["Difend SDK"]
 
-  SDK --> DiffCapture["Git Diff Capture<br/>git diff + git diff --cached"]
-  DiffCapture --> RunContext["Run Context<br/>run_id, repo path, patch, changed files"]
+  SDK --> Capture["Git Diff Capture<br/>git diff + git diff --cached"]
+  Capture --> RunContext["Run Context<br/>run_id, repo path, changed files, patch"]
   RunContext --> PatchFile["diff.patch"]
   RunContext --> Orchestrator["Scan Orchestrator Agent"]
 
-  Config["Policy Config<br/>future: team rules, severity thresholds"] -.-> Orchestrator
+  subgraph Runtime["Multi-Agent Runtime Inside The SDK"]
+    Orchestrator --> Scope["Diff Scope Collector"]
+    Orchestrator --> Gates["Automated Gates Agent"]
+    Orchestrator --> Review["Security Review Agent"]
+    Orchestrator --> Handoff["Handoff Agent"]
 
-  subgraph Runtime["Agent Runtime Inside The SDK"]
-    Orchestrator --> Scope["Diff Scope Context Collector"]
-    Orchestrator --> Secrets["Secrets Context Collector"]
-    Orchestrator --> Dependencies["Dependency Context Collector"]
-    Orchestrator --> Injection["Injection Context Collector"]
-    Orchestrator --> Authz["Auth/Authz Context Collector"]
-    Orchestrator --> SensitiveData["Sensitive Data Context Collector"]
-    Orchestrator --> CryptoSession["Crypto/Session Context Collector"]
-
-    Scope --> RelatedContext["Related Context Collector<br/>imports, routes, auth helpers, models, tests"]
-    RelatedContext --> Injection
-    RelatedContext --> Authz
-    RelatedContext --> SensitiveData
-    RelatedContext --> CryptoSession
-
-    AIAdapter["AI Review Adapter<br/>LangChain model + structured output"] -.-> AgenticReview
+    Scope --> Related["Related Context Collector<br/>imports, routes, auth helpers, models, tests"]
+    Related --> Gates
+    Related --> Review
   end
 
-  Secrets --> EvidenceStore["Evidence Store<br/>rule signals + agent evidence"]
-  Dependencies --> EvidenceStore
-  Injection --> EvidenceStore
-  Authz --> EvidenceStore
-  SensitiveData --> EvidenceStore
-  CryptoSession --> EvidenceStore
-  Scope --> EvidenceStore
-
-  EvidenceStore --> AgenticReview["Agentic Security Review Agent<br/>LangChain-powered judgment"]
-  AgenticReview --> Adjudicator["Risk Adjudicator Agent<br/>dedupe, severity, final status"]
-  Adjudicator --> SolutionProposal["Solution Proposal Agent<br/>non-mutating fix plans"]
-  SolutionProposal --> ProposalContext["Solution Proposal Context<br/>recommended changes, snippets, tests, caveats"]
-  Adjudicator --> Reporter["Report + Codex Handoff Agent"]
-  ProposalContext --> Reporter
+  Gates --> Evidence["Evidence Store<br/>rule signals + confirmed findings"]
+  Review --> Evidence
+  Evidence --> Adjudicator["Risk Adjudicator<br/>dedupe, severity, final status"]
+  Adjudicator --> Solutions["Solution Proposal Agent<br/>non-mutating fix plans"]
+  Adjudicator --> Reporter["Report Writer"]
+  Solutions --> Reporter
+  Handoff --> Reporter
 
   Reporter --> Summary["summary.md"]
-  Reporter --> ContextSignals["context-signals.md"]
+  Reporter --> Signals["context-signals.md"]
   Reporter --> Findings["findings.md"]
   Reporter --> Manual["manual-review.md"]
-  Reporter --> Solutions["solution-proposals.md"]
-  Reporter --> CodexInstructions["codex-instructions.md"]
-  Reporter --> JsonReport["report.json"]
+  Reporter --> Proposals["solution-proposals.md"]
+  Reporter --> Codex["codex-instructions.md"]
+  Reporter --> Json["report.json"]
   Reporter --> Terminal["Terminal Result<br/>pass / fail / manual_review_required"]
-
-  CodexInstructions --> FollowUp["Codex Follow-Up<br/>explain, inspect, fix with approval, rescan"]
-  Solutions --> FollowUp
-  FollowUp --> CLI
-```
-
-### Runtime Sequence
-
-```mermaid
-sequenceDiagram
-  participant Dev as Developer or Codex
-  participant CLI as diffend scan CLI
-  participant SDK as Diffend SDK
-  participant Orch as Scan Orchestrator Agent
-  participant Agents as Context Collectors
-  participant Review as Agentic Security Review Agent
-  participant Adj as Risk Adjudicator Agent
-  participant Sol as Solution Proposal Agent
-  participant Report as Report + Handoff Agent
-
-  Dev->>CLI: Run diffend scan
-  CLI->>SDK: Start scan for repository
-  SDK->>SDK: Capture staged and unstaged Git diff
-  SDK->>SDK: Create .diffend/runs/{run_id}/
-  SDK->>Orch: Send run context and patch
-  Orch->>Agents: Run context collectors
-  Agents->>Agents: Extract rule-based context signals
-  Agents->>Orch: Return structured context signals
-  Orch->>Review: Send diff, context signals, and related files
-  Review->>Review: Produce findings and manual-review items
-  Review->>Adj: Send agent-confirmed findings and evidence
-  Adj->>Adj: Deduplicate, assign severity, choose final status
-  Adj->>Sol: Request proposed solutions for findings
-  Sol->>Sol: Create fix plans without editing source files
-  Sol->>Report: Send solution proposal context
-  Adj->>Report: Send final status and evidence
-  Report->>SDK: Write Markdown, JSON, diff.patch, and proposals
-  SDK->>CLI: Return terminal summary and scan folder
-  CLI->>Dev: Show pass, fail, or manual_review_required
 ```
 
 ### Agent Responsibilities
 
-- **Scan Orchestrator Agent:** owns the run, captures the Git diff, creates `.diffend/runs/<run-id>/`, starts specialist agents, waits for results, and coordinates final output.
-- **Diff Scope Context Collector:** identifies changed files, added lines, deleted lines, file types, package files, route files, tests, and areas that may need related context.
-- **Rule-Based Context Collectors:** detect security-relevant signals such as secrets, dependency changes, injection patterns, auth/authz changes, sensitive data exposure, and crypto/session risks. These signals are context for agents, not final findings.
-- **Agentic Security Review Agent:** uses LangChain structured output, the diff, context signals, and related files to decide which risks become findings or manual-review items.
-- **Risk Adjudicator Agent:** merges findings, removes duplicates, assigns severity, decides whether the scan passes, fails, or requires manual review.
-- **Solution Proposal Agent:** creates proposed solutions for findings and manual-review items, including suggested file changes, code snippets, test ideas, and caveats. It must not directly modify the codebase.
-- **Report + Codex Handoff Agent:** writes human-readable Markdown, machine-readable JSON, the scanned patch, and focused instructions for Codex or another AI coding agent.
+- **Scan Orchestrator Agent:** owns the scan run, receives the captured diff, starts the other agents, waits for results, and coordinates final output.
+- **Diff Scope Collector:** identifies changed files, added lines, deleted lines, file types, package files, route files, tests, and areas that may need related context.
+- **Related Context Collector:** traces only the nearby files needed to understand a security-sensitive diff, such as imports, middleware, route definitions, auth helpers, models, or tests.
+- **Automated Gates Agent:** checks the diff for concrete security problems such as hardcoded secrets, dangerous dependency changes, injection patterns, unsafe shell execution, weak cryptography, insecure sessions, and sensitive data exposure.
+- **Security Review Agent:** looks for suspicious or context-dependent changes involving authentication, authorisation, privilege boundaries, business logic, sessions, personal data, database access, file access, payments, and cryptography.
+- **Risk Adjudicator:** merges findings, removes duplicates, assigns severity, and chooses the final status.
+- **Solution Proposal Agent:** creates proposed solutions, implementation notes, code snippets, test ideas, and caveats. It must not directly modify source files.
+- **Handoff Agent:** writes focused follow-up instructions for Codex or another AI coding agent, including what was scanned, what needs deeper review, which files to inspect, and how to continue safely.
+- **Report Writer:** writes human-readable Markdown, machine-readable JSON, and the exact scanned patch.
 
-### Agentic Review Configuration
+## Runtime Sequence
 
-The context collectors can run locally without an LLM. To enable the LangChain-backed Agentic Security Review Agent, configure a model through `DIFFEND_LLM_MODEL`.
+```mermaid
+sequenceDiagram
+  participant Dev as Developer or Codex
+  participant CLI as difend scan CLI
+  participant SDK as Difend SDK
+  participant Orch as Scan Orchestrator
+  participant Agents as SDK Agents
+  participant Adj as Risk Adjudicator
+  participant Report as Report Writer
 
-Example:
-
-```bash
-DIFFEND_LLM_MODEL=openai:gpt-4o-mini diffend scan
+  Dev->>CLI: Run difend scan
+  CLI->>SDK: Start scan for repository
+  SDK->>SDK: Capture staged and unstaged Git diff
+  SDK->>SDK: Create .difend/runs/{run_id}/
+  SDK->>Orch: Send run context and patch
+  Orch->>Agents: Run scope, gates, review, proposals, and handoff agents
+  Agents->>Agents: Extract signals and produce structured findings
+  Agents->>Adj: Return findings, manual-review items, and evidence
+  Adj->>Adj: Deduplicate, assign severity, choose final status
+  Adj->>Report: Send final status and evidence
+  Report->>SDK: Write Markdown, JSON, and diff.patch
+  SDK->>CLI: Return terminal summary and scan folder
+  CLI->>Dev: Show pass, fail, or manual_review_required
 ```
-
-If no model is configured, Diffend still writes `context-signals.md` so the collected signals can be handed to Codex or another agent as review context.
 
 ## Workflow
 
-Diffend focuses only on the code diff. It does not try to review the whole repository unless changed lines require related context.
-
-### Execution Flow
+Difend focuses on the code diff. It does not try to review the whole repository unless changed lines require related context.
 
 1. A developer, Codex, or another AI coding tool makes changes to a repository.
 2. The developer runs:
 
 ```bash
-diffend scan
+difend scan
 ```
 
-3. The CLI triggers the Diffend SDK.
+3. The CLI triggers the Difend SDK.
 4. The SDK captures the current Git diff.
-5. Diffend creates a scan output folder for the current run.
-6. The Scan Orchestrator Agent sends the diff to context collectors.
-7. Rule-based context collectors extract security-relevant signals from the diff.
-8. The Agentic Security Review Agent uses those signals as context for deeper judgment.
-9. The Risk Adjudicator Agent combines agent-confirmed findings into one final decision.
-10. The Solution Proposal Agent creates proposed fixes as reviewable context without editing source files.
-11. The Report + Codex Handoff Agent writes the final scan bundle.
-12. The developer can ask Codex or another agent to read the generated Markdown files for deeper review, explanation, or remediation.
+5. Difend creates a scan output folder for the current run.
+6. The Scan Orchestrator Agent sends the diff to the SDK agents.
+7. The Automated Gates Agent catches concrete, common security problems.
+8. The Security Review Agent flags suspicious context-dependent changes.
+9. The Risk Adjudicator combines the results into one final decision.
+10. The Solution Proposal Agent creates proposed fixes without editing source files.
+11. The Handoff Agent writes Codex follow-up instructions.
+12. The Report Writer writes the final scan bundle.
+13. The developer can ask Codex or another agent to read the generated Markdown files for deeper review, explanation, or remediation.
 
-### Git Diff Scope
+## Git Diff Scope
 
 The first version should scan the current working tree diff:
 
@@ -199,21 +160,18 @@ Untracked files should be documented as a limitation in the first version, then 
 
 The terminal output should be short, readable, and useful during normal development.
 
-Example:
-
 ```text
-Diffend scan started
+Difend scan started
 
-Checking diff scope context... done
-Checking secrets context... done
-Checking dependency context... done
-Checking injection context... warning
-Running agentic security review... manual review required
+Checking diff scope... done
+Running automated gates... done
+Running security review... manual review required
 Creating solution proposals... done
+Writing Codex handoff... done
 
 Status: manual review required
-Report written to: .diffend/runs/2026-04-29-001/
-Next: ask Codex to read .diffend/runs/2026-04-29-001/codex-instructions.md
+Report written to: .difend/runs/2026-04-29-001/
+Next: ask Codex to read .difend/runs/2026-04-29-001/codex-instructions.md
 ```
 
 ## Final Status Rules
@@ -230,10 +188,8 @@ The CLI may display `manual_review_required` as `manual review required` for rea
 
 Each scan should always generate an output folder, even when no problems are found.
 
-Example:
-
 ```text
-.diffend/
+.difend/
   runs/
     2026-04-29-001/
       summary.md
@@ -249,24 +205,24 @@ Example:
 ### File Responsibilities
 
 - `summary.md`: human-readable scan summary, final status, checks performed, and next steps.
-- `context-signals.md`: rule-based security signals collected as context for the agentic review layer.
-- `findings.md`: agent-confirmed findings with severity, evidence, location, agent name, and recommendation.
-- `manual-review.md`: suspicious areas that require human or AI-assisted security judgment.
+- `context-signals.md`: deterministic security signals collected as context for the agentic review layer.
+- `findings.md`: confirmed findings with severity, evidence, location, agent name, and recommendation.
+- `manual-review.md`: suspicious areas that require human or AI-assisted security judgement.
 - `solution-proposals.md`: non-mutating proposed fixes, implementation notes, suggested tests, and caveats for developers and Codex.
 - `codex-instructions.md`: focused prompt-style handoff file telling Codex what was scanned, what needs deeper review, which files to inspect, and how to continue safely.
-- `diff.patch`: the exact Git diff that Diffend scanned.
+- `diff.patch`: the exact Git diff that Difend scanned.
 - `report.json`: structured machine-readable report for future integrations, CI, IDE plugins, dashboards, and AI coding tools.
 
-## Rule Signal Format
+## Structured Output
 
-Rule-based collectors should return context signals using a shared structure. These are hints for agents, not final findings.
+Agents should return structured data so the SDK can write both Markdown and JSON reports.
 
-Example:
+### Context Signal
 
 ```json
 {
   "signal_id": "signal-001",
-  "source": "auth-authz-context",
+  "source": "automated-gates",
   "type": "removed_auth_logic",
   "severity_hint": "high",
   "file": "src/routes/admin.ts",
@@ -279,16 +235,12 @@ Example:
 }
 ```
 
-## Finding Format
-
-Agentic review nodes should return findings using a shared structure.
-
-Example:
+### Finding
 
 ```json
 {
   "finding_id": "finding-001",
-  "agent": "auth-authz-risk",
+  "agent": "security-review",
   "type": "authorization_change",
   "severity": "high",
   "status": "manual_review_required",
@@ -303,13 +255,7 @@ Example:
 }
 ```
 
-## Solution Proposal Format
-
-The Solution Proposal Agent should create proposed fixes as context only. It must not edit source files, stage changes, commit changes, or apply patches.
-
-Each proposal should connect back to one or more findings or manual-review items.
-
-Example:
+### Solution Proposal
 
 ```json
 {
@@ -342,7 +288,7 @@ The first version of `report.json` should follow a simple schema that can evolve
 
 ```json
 {
-  "tool": "diffend",
+  "tool": "difend",
   "run_id": "2026-04-29-001",
   "status": "manual_review_required",
   "repository": {
@@ -358,20 +304,20 @@ The first version of `report.json` should follow a simple schema that can evolve
   },
   "checks": [
     {
-      "agent": "secrets-context",
+      "agent": "automated-gates",
       "status": "pass",
       "signals_count": 0
     },
     {
-      "agent": "agentic-security-review",
+      "agent": "security-review",
       "status": "manual_review_required",
       "manual_review_count": 1
     }
   ],
-  "rule_signals": [
+  "context_signals": [
     {
       "signal_id": "signal-001",
-      "source": "auth-authz-context",
+      "source": "automated-gates",
       "type": "removed_auth_logic",
       "severity_hint": "high",
       "file": "src/routes/admin.ts",
@@ -381,7 +327,7 @@ The first version of `report.json` should follow a simple schema that can evolve
   "findings": [
     {
       "finding_id": "finding-001",
-      "agent": "auth-authz-risk",
+      "agent": "security-review",
       "type": "authorization_change",
       "severity": "high",
       "status": "manual_review_required",
@@ -423,86 +369,99 @@ Every scan should leave enough context for a future reviewer or AI coding assist
 
 - What diff was scanned?
 - Which files and added lines were involved?
-- Which context collectors and agentic review steps ran?
-- Which rule-based context signals were collected?
+- Which SDK agents ran?
+- Which deterministic context signals were collected?
 - Which findings are concrete security problems?
-- Which areas are suspicious but need deeper judgment?
+- Which areas are suspicious but need deeper judgement?
 - Which proposed solutions are available for developer review?
 - Which related files should Codex inspect next?
 - What is the safest next action for the developer?
 
 ## AI Agent Follow-Up Workflow
 
-Diffend should support an AI-assisted review loop after the scan bundle is created.
+Difend should support an AI-assisted review loop after the scan bundle is created.
 
-Example:
-
-1. Developer runs `diffend scan`.
-2. Diffend writes `.diffend/runs/<run-id>/context-signals.md`.
-3. Diffend writes `.diffend/runs/<run-id>/codex-instructions.md`.
-4. Diffend writes `.diffend/runs/<run-id>/solution-proposals.md`.
+1. Developer runs `difend scan`.
+2. Difend writes `.difend/runs/<run-id>/context-signals.md`.
+3. Difend writes `.difend/runs/<run-id>/codex-instructions.md`.
+4. Difend writes `.difend/runs/<run-id>/solution-proposals.md`.
 5. Developer reviews the proposed solution context.
 6. Developer asks Codex to read the scan bundle, context signals, and proposals.
-7. Codex inspects the exact diff and related files listed by Diffend.
+7. Codex inspects the exact diff and related files listed by Difend.
 8. Codex explains the security risk.
 9. Codex suggests or applies a developer-approved fix.
-10. Developer reruns `diffend scan`.
-11. Diffend compares the new scan result and produces an updated bundle.
+10. Developer reruns `difend scan`.
+11. Difend compares the new scan result and produces an updated bundle.
 12. The final result is `pass`, `fail`, or `manual_review_required`.
 
 Later versions can support a stronger remediation workflow, but code modification should remain under developer control unless explicit approval is added.
 
 ## Implementation Phases
 
-### Phase 1: Deterministic CLI and SDK
+### Phase 1: Deterministic CLI And SDK
 
-Build the first working version of `diffend scan`.
+Build the first working version of `difend scan`.
 
 - Implement the CLI command.
 - Capture staged and unstaged Git diffs.
-- Create `.diffend/runs/<run-id>/` for each scan.
+- Create `.difend/runs/<run-id>/` for each scan.
 - Write `summary.md`, `context-signals.md`, `findings.md`, `manual-review.md`, `solution-proposals.md`, `codex-instructions.md`, `diff.patch`, and `report.json`.
-- Define shared finding and report types.
+- Define shared signal, finding, proposal, and report types.
 - Print progress for each check in the terminal.
 - Return `pass`, `fail`, or `manual_review_required`.
 
-### Phase 2: Rule-Based Context Collectors
+### Phase 2: SDK Multi-Agent Runtime
+
+Move review work behind a clean SDK orchestration layer.
+
+- Add the Scan Orchestrator Agent.
+- Add the Diff Scope Collector.
+- Add the Related Context Collector.
+- Add the Automated Gates Agent.
+- Add the Security Review Agent.
+- Add the Risk Adjudicator.
+- Add the Solution Proposal Agent.
+- Add the Handoff Agent.
+- Keep agent inputs and outputs structured.
+
+### Phase 3: Rule-Based Security Collectors
 
 Add deterministic collectors that produce context signals for the agentic review layer.
 
 - Secrets scanning.
 - Dependency change detection.
-- Simple injection pattern checks.
+- Injection pattern checks.
 - Risky authentication or authorisation change detection.
 - Sensitive data exposure checks.
 - Weak cryptography and unsafe session checks.
+- Unsafe shell, file, and network access checks.
 
-### Phase 3: AI-Assisted Risk Review
+### Phase 4: AI-Assisted Security Review
 
-Add LLM-powered or AI-assisted specialist agents for deeper review.
+Add LLM-powered or AI-assisted specialist review inside the SDK.
 
 - Trace related files from the diff when needed.
-- Use `context-signals.md` and `rule_signals` as agent context.
+- Use `context-signals.md` and `context_signals` as review context.
 - Identify suspicious changes in security-sensitive areas.
 - Generate manual review checklists.
-- Generate non-mutating solution proposal context for findings.
+- Generate non-mutating solution proposal context.
 - Produce higher-quality Codex handoff instructions.
 - Keep every conclusion evidence-based.
 
-### Phase 4: Proposal Review and Verification Loop
+### Phase 5: Proposal Review And Verification Loop
 
 Add an explicit loop for reviewing proposed solutions and verifying follow-up fixes.
 
 - Improve proposed fix quality with safer implementation plans, code snippets, and test suggestions.
 - Keep the Solution Proposal Agent non-mutating.
 - Let developers decide whether to hand proposals to Codex or implement them manually.
-- Rerun `diffend scan`.
+- Rerun `difend scan`.
 - Compare before and after scan results.
 - Produce final review notes.
 
-### Phase 5: Integrations
+### Phase 6: Integrations
 
-Extend Diffend beyond local CLI use.
+Extend Difend beyond local CLI use.
 
 - CI integration.
 - GitHub pull request comments.
@@ -511,54 +470,15 @@ Extend Diffend beyond local CLI use.
 - Historical scan comparison.
 - Policy configuration for teams.
 
-## Roadmap
-
-### 29/04/2026
-
-- Implement the first version of the `diffend scan` command.
-- Implement Git diff capture from the current working tree.
-- Define the core Diffend SDK interface:
-  - input: repository path and captured diff
-  - output: structured security report, final status, and scan output folder
-- Create `.diffend/runs/<run-id>/` for each scan.
-- Write the first scan bundle files.
-- Build the first context collector runner.
-- Add initial context collectors for secrets, dependency changes, simple injection patterns, and risky auth/authz changes.
-- Define shared finding and report formats.
-- Print progress for each check in the terminal.
-- Make `codex-instructions.md` useful as a direct handoff prompt for Codex.
-- Test the command against small sample diffs.
-
-Goal for the day: `diffend scan` can capture a diff, collect rule-based context signals, print terminal progress, and write a structured scan bundle that developers can hand to Codex for follow-up.
-
-### 30/04/2026
-
-- Implement the first version of the multi-agent review architecture.
-- Add the Scan Orchestrator Agent.
-- Add specialist agents for secrets, dependencies, injection, auth/authz, sensitive data, and crypto/session review.
-- Add the Risk Adjudicator Agent.
-- Add the Solution Proposal Agent.
-- Add the Report + Codex Handoff Agent.
-- Generate a manual review checklist when suspicious security risk is found.
-- Generate `solution-proposals.md` with proposed fixes that developers can review before handing them to Codex.
-- Merge agent-confirmed findings and security risk findings into one final report.
-- Improve `codex-instructions.md` for AI-agent follow-up.
-- Run end-to-end tests on sample vulnerable diffs.
-- Document known limitations and next steps.
-
-Goal for the day: Diffend can run a multi-agent diff security review and produce a final report with Markdown files that support Codex-assisted follow-up.
-
 ## Known Limitations For V1
 
 - Untracked files may not be scanned at first.
 - Rule-based context signals will initially rely on simple deterministic patterns.
 - Solution proposals are advisory context and must be reviewed before implementation.
 - Dependency vulnerability lookups may require later registry or advisory database integration.
-- AI-assisted review should be treated as advisory, not as a replacement for human security judgment.
-- Diffend should not claim that a scan proves code is secure. It should say what was scanned, what was found, and what still needs review.
+- AI-assisted review should be treated as advisory, not as a replacement for human security judgement.
+- Difend should not claim that a scan proves code is secure. It should say what was scanned, what was found, and what still needs review.
 
 ## Resources
 
 - [AI-Generated Code Security Risks - Why Vulnerabilities Increase 2.74x and How to Prevent Them](https://www.softwareseni.com/ai-generated-code-security-risks-why-vulnerabilities-increase-2-74x-and-how-to-prevent-them/)
-
-gververvrevervrev
